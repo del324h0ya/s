@@ -1,0 +1,1 @@
+CI validation target: Phase 2 checkout and webhook implementation.

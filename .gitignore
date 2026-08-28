@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+*.db
+bot_logs.log
+.pytest_cache/
