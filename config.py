@@ -1,7 +1,9 @@
 """NEURAL GOLD v3.2 configuration for Belmo deployment."""
 from __future__ import annotations
+
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,6 +36,17 @@ if not TELEGRAM_BOT_TOKEN:
 if not GOLDAPI_API_KEY:
     raise RuntimeError("GOLDAPI_API_KEY is not set. Add it in Belmo Environment Variables.")
 
-if not BELMO_PUBLIC_URL:
-    # Allow local development; production Belmo should set the public URL.
-    BELMO_PUBLIC_URL = ""
+# A public deployment uses both webhook channels, so fail fast when their
+# authentication material is incomplete. Local development can still start
+# without BELMO_PUBLIC_URL and use polling/manual tests.
+if BELMO_PUBLIC_URL:
+    if not TELEGRAM_WEBHOOK_SECRET:
+        raise RuntimeError(
+            "TELEGRAM_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set."
+        )
+    if not WHOP_WEBHOOK_SECRET:
+        raise RuntimeError(
+            "WHOP_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set."
+        )
+    if not WHOP_API_KEY:
+        raise RuntimeError("WHOP_API_KEY is required for production checkout flow.")
