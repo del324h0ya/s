@@ -23,9 +23,15 @@ GOLDAPI_API_KEY = os.getenv("GOLDAPI_API_KEY", "").strip()
 PRICE_SYMBOL = "XAU/USD"
 GOLDAPI_ENDPOINT = "https://www.goldapi.io/api/price/XAU/USD"
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///xauusd_bot.db").strip()
+_raw_database_url = os.getenv("DATABASE_URL", "sqlite:///xauusd_bot.db").strip()
+if _raw_database_url.startswith("sqlite:///") and not _raw_database_url.startswith("sqlite:////"):
+    _db_name = _raw_database_url[len("sqlite:///"):].lstrip("/") or "xauusd_bot.db"
+    DATABASE_URL = f"sqlite:////tmp/{_db_name}"
+else:
+    DATABASE_URL = _raw_database_url
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip()
-LOG_FILE = str(BASE_DIR / "bot_logs.log")
+LOG_FILE = "/tmp/neural_gold_bot.log"
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
 NEURAL_VERSION = "v3.2"
@@ -36,17 +42,10 @@ if not TELEGRAM_BOT_TOKEN:
 if not GOLDAPI_API_KEY:
     raise RuntimeError("GOLDAPI_API_KEY is not set. Add it in Belmo Environment Variables.")
 
-# A public deployment uses both webhook channels, so fail fast when their
-# authentication material is incomplete. Local development can still start
-# without BELMO_PUBLIC_URL and use polling/manual tests.
 if BELMO_PUBLIC_URL:
     if not TELEGRAM_WEBHOOK_SECRET:
-        raise RuntimeError(
-            "TELEGRAM_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set."
-        )
+        raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set.")
     if not WHOP_WEBHOOK_SECRET:
-        raise RuntimeError(
-            "WHOP_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set."
-        )
+        raise RuntimeError("WHOP_WEBHOOK_SECRET is required when BELMO_PUBLIC_URL is set.")
     if not WHOP_API_KEY:
         raise RuntimeError("WHOP_API_KEY is required for production checkout flow.")
