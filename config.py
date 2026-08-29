@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,12 +27,13 @@ GOLDAPI_ENDPOINT = "https://www.goldapi.io/api/price/XAU/USD"
 _raw_database_url = os.getenv("DATABASE_URL", "sqlite:///xauusd_bot.db").strip()
 if _raw_database_url.startswith("sqlite:///") and not _raw_database_url.startswith("sqlite:////"):
     _db_name = _raw_database_url[len("sqlite:///"):].lstrip("/") or "xauusd_bot.db"
-    DATABASE_URL = f"sqlite:////tmp/{_db_name}"
+    _db_path = (Path(tempfile.gettempdir()) / _db_name).resolve()
+    DATABASE_URL = f"sqlite:///{_db_path.as_posix()}"
 else:
     DATABASE_URL = _raw_database_url
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip()
-LOG_FILE = "/tmp/neural_gold_bot.log"
+LOG_FILE = str(Path(tempfile.gettempdir()) / "neural_gold_bot.log")
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
 NEURAL_VERSION = "v3.2"
