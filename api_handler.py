@@ -6,6 +6,7 @@ claims of guaranteed trading outcomes.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 from datetime import datetime, timezone
@@ -68,7 +69,9 @@ def _simulate_technical_indicators(price: float, change_pct: float) -> dict[str,
     This preserves the existing UI contract while avoiding external indicator
     dependencies. Customer-facing labels use Alpha-Senti terminology.
     """
-    rng = random.Random(hash(f"{round(price,2)}:{round(change_pct,4)}") % (2**31))
+    seed_material = f"{round(price,2):.2f}:{round(change_pct,4):.4f}".encode("utf-8")
+    seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+    rng = random.Random(seed)
     temporal = max(0.0, min(100.0, 50 + change_pct * 80 + rng.uniform(-5, 5)))
     phase = change_pct * 15 + rng.uniform(-0.5, 0.5)
     variance = rng.uniform(10.0, 22.0)
