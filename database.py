@@ -15,7 +15,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, select
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, select
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import DATABASE_URL
@@ -76,7 +76,17 @@ class TokenPool(Base):
 
 
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA journal_mode=WAL")
+        finally:
+            cursor.close()
+
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
 def init_db() -> None:
@@ -172,7 +182,7 @@ def create_user(telegram_id: int, username: str | None, first_name: str | None, 
         session.close()
 
 
-def activate_user_token(telegram_id: int, raw_token: str, duration_days: int) -> bool:
+def activate_user_token(telegram_id: int, raw_token: str, duration_days: int | None = None) -> bool:
     session = _get_session()
     try:
         token_hash = _hash_token(raw_token)
@@ -180,6 +190,8 @@ def activate_user_token(telegram_id: int, raw_token: str, duration_days: int) ->
         if pool_entry is None:
             logger.warning("Token activation failed for user %d: token not found or already used.", telegram_id)
             return False
+        if duration_days is None:
+            duration_days = pool_entry.duration_days
 
         pool_entry.is_used = True
         pool_entry.used_at = datetime.now(timezone.utc)
@@ -191,7 +203,6 @@ def activate_user_token(telegram_id: int, raw_token: str, duration_days: int) ->
             session.add(user)
             session.flush()
 
-        # Extend an existing active subscription instead of replacing unused time.
         now = datetime.now(timezone.utc)
         current_expiry = normalize_datetime_utc(user.subscription_expiry)
         base_time = current_expiry if user.is_active and current_expiry and current_expiry > now else now
