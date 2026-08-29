@@ -30,6 +30,7 @@ import database
 from i18n import LANGUAGES, detect_language, language_buttons, t
 from config import (
     ADMIN_TELEGRAM_ID,
+    BELMO_PUBLIC_URL,
     LOG_FILE,
     LOG_FORMAT,
     LOG_LEVEL,
@@ -58,8 +59,6 @@ PLAN_LABELS = {
     30: "30 DAYS • PREMIUM",
 }
 
-# Customer-facing Alpha-Senti terminology. Internal calculation keys remain
-# unchanged for backward compatibility with the signal engine/database.
 ALPHA_TERMS = {
     "rsi": "TEMPORAL MOMENTUM RESONANCE",
     "macd": "DUAL-PHASE CONVERGENCE MANIFOLD",
@@ -98,7 +97,6 @@ def _localized_text(update: Update, text: str) -> str:
     lang = _lang(update)
     if lang == "en":
         return text
-    # Stable UI phrases that occur throughout the existing premium screens.
     replacements = {
         "LIVE MARKET FEED":"live_feed", "NEURAL SIGNAL":"neural_signal", "MARKET ANALYSIS":"analysis_title",
         "SELECT A MODULE":"select_module", "PREMIUM ACCESS ACTIVE":"premium_active", "ACCESS NOT ACTIVATED":"access_off",
@@ -224,27 +222,19 @@ def support_keyboard(update: Update) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# SCREEN RENDERERS
-# ═══════════════════════════════════════════════════════════════════════
-
 async def render_home(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True) -> None:
     user = update.effective_user
     if user is None:
         return
-
     db_user = database.get_user_by_telegram_id(user.id)
     active = False
     if db_user:
         active, _ = auth.verify_token(user.id)
-
     if not active:
         await render_access(update, context)
         return
-
     access_line = "● PREMIUM ACCESS ACTIVE"
     access_hint = "Live intelligence unlocked."
-
     text = (
         f"<b>NEURAL GOLD</b>  <code>{NEURAL_VERSION}</code>\n"
         f"<i>PREMIUM XAU/USD MARKET INTELLIGENCE</i>\n"
@@ -267,12 +257,10 @@ async def render_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     if user is None:
         return
-
     valid, _ = auth.verify_token(user.id)
     if not valid:
         await render_locked(update, "price")
         return
-
     await _answer_loading(update, "Syncing live market feed…")
     try:
         data = await api_handler.get_cached_or_fresh_price(user.id)
@@ -314,12 +302,10 @@ async def render_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     if user is None:
         return
-
     valid, _ = auth.verify_token(user.id)
     if not valid:
         await render_locked(update, "signal")
         return
-
     await _answer_loading(update, "Building neural signal…")
     try:
         data = await api_handler.get_cached_or_fresh_price(user.id)
@@ -365,6 +351,14 @@ async def render_signal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _present(update, "<b>🟡 NEURAL SIGNAL</b>\n\n<pre>◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◥\n  STATUS: SIGNAL ENGINE UNAVAILABLE\n◣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◢</pre>\nPlease refresh in a moment.", signal_keyboard(update))
 
 
+def _bias_icon(momentum: str) -> str:
+    if "BULLISH" in momentum:
+        return "🟢"
+    if "BEARISH" in momentum:
+        return "🔴"
+    return "🟡"
+
+
 async def render_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None:
@@ -373,7 +367,6 @@ async def render_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not valid:
         await render_locked(update, "analysis")
         return
-
     await _answer_loading(update, "Reading market structure…")
     try:
         data = await api_handler.get_cached_or_fresh_price(user.id)
@@ -460,7 +453,6 @@ async def render_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     active = False
     if user:
         active, _ = auth.verify_token(user.id)
-
     state = "ACTIVE" if active else "READY TO ACTIVATE"
     icon = "🟢" if active else "◆"
     text = (
@@ -530,10 +522,6 @@ async def render_locked(update: Update, module: str) -> None:
     await _present(update, text, access_keyboard(update))
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# TELEGRAM PRESENTATION HELPERS
-# ═══════════════════════════════════════════════════════════════════════
-
 async def _answer_loading(update: Update, text: str) -> None:
     query = update.callback_query
     if query:
@@ -543,12 +531,7 @@ async def _answer_loading(update: Update, text: str) -> None:
             pass
 
 
-async def _present(
-    update: Update,
-    text: str,
-    keyboard: InlineKeyboardMarkup,
-    edit: bool = True,
-) -> None:
+async def _present(update: Update, text: str, keyboard: InlineKeyboardMarkup, edit: bool = True) -> None:
     query = update.callback_query
     if query and edit:
         try:
@@ -556,14 +539,9 @@ async def _present(
             return
         except Exception as exc:
             logger.debug("Could not edit callback message: %s", exc)
-
     if update.message:
         await update.message.reply_text(_localized_text(update, text), parse_mode="HTML", reply_markup=keyboard)
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# COMMAND HANDLERS
-# ═══════════════════════════════════════════════════════════════════════
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -584,29 +562,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def activate_token_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> None:
-    """Activate a single-use token and return the user to the premium dashboard."""
     user = update.effective_user
     if user is None:
         return
-
     existing = database.get_user_by_telegram_id(user.id)
     if existing is None:
         database.create_user(user.id, user.username, user.first_name)
-
     import hashlib
     from sqlalchemy import select
     from database import TokenPool, _get_session
-
     token_hash = hashlib.sha256(raw_token.strip().encode("utf-8")).hexdigest()
     session = _get_session()
     try:
-        entry = session.scalar(
-            select(TokenPool).where(TokenPool.token_hash == token_hash, TokenPool.is_used == False)  # noqa: E712
-        )
+        entry = session.scalar(select(TokenPool).where(TokenPool.token_hash == token_hash, TokenPool.is_used == False))  # noqa: E712
         duration = entry.duration_days if entry else 30
     finally:
         session.close()
-
     success = database.activate_user_token(user.id, raw_token, duration)
     if success:
         db_user = database.get_user_by_telegram_id(user.id)
@@ -630,24 +601,12 @@ async def activate_token_for_user(update: Update, context: ContextTypes.DEFAULT_
         )
 
 
-async def token_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Accept a token after the user taps ACTIVATE TOKEN."""
-    if not context.user_data.get("awaiting_token"):
-        return
+async def token_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> None:
     context.user_data["awaiting_token"] = False
-    raw_token = (update.message.text or "").strip()
-    if not raw_token:
-        await update.message.reply_text("Please send the activation token.", reply_markup=access_keyboard(update))
-        return
-    try:
-        await activate_token_for_user(update, context, raw_token)
-    except Exception as exc:
-        logger.exception("Interactive token activation failed: %s", exc)
-        await update.message.reply_text("⚠ Activation service temporarily unavailable.", parse_mode="HTML", reply_markup=access_keyboard(update))
+    await activate_token_for_user(update, context, raw_token)
 
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fallback activation command for users who prefer commands."""
     if not context.args:
         await update.message.reply_text(
             "<b>🔑 ACTIVATE ACCESS</b>\n\n"
@@ -672,10 +631,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
     await render_home(update, context, edit=False)
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# ADMIN HANDLERS
-# ═══════════════════════════════════════════════════════════════════════
 
 @auth.require_admin
 async def addtoken_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -736,7 +691,6 @@ async def revoke_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def paid_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Notify the configured admin that a customer reports a completed Whop payment."""
     query = update.callback_query
     user = update.effective_user
     if query is None or user is None:
@@ -745,7 +699,6 @@ async def paid_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.answer("Payment notice sent.", show_alert=False)
     except Exception:
         pass
-
     username = f"@{user.username}" if user.username else "(no username)"
     text = (
         "<b>💳 PAYMENT NOTICE</b>\n"
@@ -758,14 +711,9 @@ async def paid_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     if ADMIN_TELEGRAM_ID:
         try:
-            await context.bot.send_message(
-                chat_id=ADMIN_TELEGRAM_ID,
-                text=text,
-                parse_mode="HTML",
-            )
+            await context.bot.send_message(chat_id=ADMIN_TELEGRAM_ID, text=text, parse_mode="HTML")
         except Exception:
             logger.exception("Failed to send payment notice to admin")
-
     await query.message.reply_text(
         "<b>PAYMENT NOTICE REGISTERED</b>\n\n"
         "Your payment notice has been sent to support. "
@@ -774,24 +722,18 @@ async def paid_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         reply_markup=access_keyboard(update),
     )
 
-# ═══════════════════════════════════════════════════════════════════════
-# CALLBACK ROUTER
-# ═══════════════════════════════════════════════════════════════════════
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None:
         return
     data = query.data or ""
-
     if data == "noop":
         await query.answer("This setting is controlled by the bot configuration.", show_alert=True)
         return
-
     if data == "paid:menu":
         await paid_confirmation(update, context)
         return
-
     if data.startswith("nav:"):
         try:
             await query.answer()
@@ -803,7 +745,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await render_home(update, context)
         return
-
     if data.startswith("screen:"):
         target = data.split(":", 1)[1]
         if target in {"home", "account", "access", "settings", "support"}:
@@ -828,7 +769,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif target == "support":
             await render_support(update, context)
         return
-
     if data.startswith("lang:"):
         lang = data.split(":", 1)[1]
         if lang not in LANGUAGES:
@@ -840,7 +780,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             pass
         await render_home(update, context)
         return
-
     if data == "settings:language":
         try:
             await query.answer()
@@ -849,7 +788,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lang = _lang(update)
         await _present(update, f"<b>🌐 {t(lang, 'choose_language')}</b>\n{DIVIDER}\n\n{t(lang, 'language_names')}", language_keyboard(update))
         return
-
     if data == "action:token":
         try:
             await query.answer()
@@ -872,7 +810,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Never leave an unknown command unanswered."""
     await update.message.reply_text(
         "<b>NEURAL GOLD</b>\n\n"
         "⌁ Command not recognized.\n"
@@ -883,9 +820,16 @@ async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def unknown_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle arbitrary customer text without silently ignoring it."""
     if context.user_data.get("awaiting_token"):
-        await token_text_handler(update, context)
+        raw_token = (update.message.text or "").strip()
+        if not raw_token:
+            await update.message.reply_text("Please send the activation token.", reply_markup=access_keyboard(update))
+            return
+        try:
+            await token_text_handler(update, context, raw_token)
+        except Exception as exc:
+            logger.exception("Interactive token activation failed: %s", exc)
+            await update.message.reply_text("⚠ Activation service temporarily unavailable.", parse_mode="HTML", reply_markup=access_keyboard(update))
         return
     await update.message.reply_text(
         "<b>NEURAL GOLD</b>\n\n"
@@ -895,10 +839,6 @@ async def unknown_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=access_keyboard(update),
     )
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# ERROR / LIFECYCLE
-# ═══════════════════════════════════════════════════════════════════════
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     error = context.error
@@ -930,14 +870,12 @@ async def post_init(application: Application) -> None:
     try:
         await application.bot.set_my_short_description(SHORT_DESCRIPTION)
         await application.bot.set_my_description(BOT_DESCRIPTION)
-        await application.bot.set_my_commands(
-            [
-                ("start", "Open premium dashboard"),
-                ("token", "Activate access token"),
-                ("status", "View account status"),
-                ("help", "Open dashboard"),
-            ]
-        )
+        await application.bot.set_my_commands([
+            ("start", "Open premium dashboard"),
+            ("token", "Activate access token"),
+            ("status", "View account status"),
+            ("help", "Open dashboard"),
+        ])
         logger.info("Telegram premium profile metadata configured.")
     except Exception as exc:
         logger.warning("Could not configure Telegram profile metadata: %s", exc)
@@ -945,23 +883,20 @@ async def post_init(application: Application) -> None:
 
 def setup_logging() -> None:
     log_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
-
     root = logging.getLogger()
     root.setLevel(log_level)
-
     if not root.handlers:
         sh = logging.StreamHandler(sys.stdout)
         sh.setLevel(log_level)
         sh.setFormatter(logging.Formatter(LOG_FORMAT))
         root.addHandler(sh)
-
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
+
 
 def build_application() -> Application:
     """Build the Telegram application for Belmo webhook processing."""
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
-
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("token", token_command))
     application.add_handler(CommandHandler("status", lambda u, c: render_account(u, c)))
@@ -977,9 +912,18 @@ def build_application() -> Application:
 
 
 def main() -> None:
-    """Local-development fallback only. Belmo production uses app.py + webhook."""
+    """Start HTTP mode on Belmo; retain polling for local development."""
     setup_logging()
     database.init_db()
+
+    if BELMO_PUBLIC_URL:
+        import uvicorn
+
+        port = int(os.getenv("PORT", "3000"))
+        logger.info("Starting Belmo FastAPI mode on port %d.", port)
+        uvicorn.run("app:app", host="0.0.0.0", port=port, log_level=LOG_LEVEL.lower())
+        return
+
     application = build_application()
     logger.info("Starting local polling mode.")
     application.run_polling(drop_pending_updates=True)
