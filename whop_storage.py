@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 import database
 
@@ -63,16 +64,18 @@ def create_order(order_id: str, telegram_id: int, plan_id: str, duration_days: i
     now = _now()
     try:
         with database.engine.begin() as conn:
-            result = conn.execute(
+            conn.execute(
                 text("""
-                    INSERT OR IGNORE INTO whop_orders
+                    INSERT INTO whop_orders
                     (id, telegram_id, plan_id, duration_days, status, created_at, updated_at)
                     VALUES (:id, :telegram_id, :plan_id, :duration_days, 'pending', :created_at, :updated_at)
                 """),
                 {"id": order_id, "telegram_id": telegram_id, "plan_id": plan_id,
                  "duration_days": duration_days, "created_at": now, "updated_at": now},
             )
-            return result.rowcount == 1
+            return True
+    except IntegrityError:
+        return False
     except Exception:
         logger.exception("Failed to create Whop order %s", order_id)
         return False
@@ -108,6 +111,15 @@ def get_order(order_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+def get_order_by_checkout(checkout_id: str) -> dict | None:
+    with database.engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT * FROM whop_orders WHERE checkout_id = :checkout_id"),
+            {"checkout_id": checkout_id},
+        ).mappings().first()
+        return dict(row) if row else None
+
+
 def get_order_by_payment(payment_id: str) -> dict | None:
     with database.engine.begin() as conn:
         row = conn.execute(
@@ -127,30 +139,34 @@ def get_order_by_membership(membership_id: str) -> dict | None:
 
 
 def claim_webhook(event_id: str, event_type: str, payment_id: str | None = None) -> bool:
-    """Atomically claim an event for processing, while allowing failed events to retry."""
+    """Claim an event once and allow previously failed/received events to retry."""
     now = _now()
     try:
         with database.engine.begin() as conn:
-            inserted = conn.execute(
+            conn.execute(
                 text("""
-                    INSERT OR IGNORE INTO whop_webhook_events
+                    INSERT INTO whop_webhook_events
                     (id, event_type, payment_id, status, created_at)
                     VALUES (:id, :event_type, :payment_id, 'processing', :created_at)
                 """),
                 {"id": event_id, "event_type": event_type, "payment_id": payment_id, "created_at": now},
             )
-            if inserted.rowcount == 1:
-                return True
-
-            reclaimed = conn.execute(
-                text("""
-                    UPDATE whop_webhook_events
-                    SET status = 'processing', processed_at = NULL, error_message = NULL
-                    WHERE id = :id AND status IN ('failed', 'received')
-                """),
-                {"id": event_id},
-            )
-            return reclaimed.rowcount == 1
+            return True
+    except IntegrityError:
+        try:
+            with database.engine.begin() as conn:
+                reclaimed = conn.execute(
+                    text("""
+                        UPDATE whop_webhook_events
+                        SET status = 'processing', processed_at = NULL, error_message = NULL
+                        WHERE id = :id AND status IN ('failed', 'received')
+                    """),
+                    {"id": event_id},
+                )
+                return reclaimed.rowcount == 1
+        except Exception:
+            logger.exception("Failed to reclaim Whop webhook %s", event_id)
+            return False
     except Exception:
         logger.exception("Failed to claim Whop webhook %s", event_id)
         return False
