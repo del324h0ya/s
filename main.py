@@ -7,6 +7,7 @@ administration and token activation.
 """
 
 import html
+import hashlib
 import logging
 import os
 import secrets
@@ -284,8 +285,8 @@ async def render_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"  PRICE      {_money(mid)} ⚡️ [STABLE]\n"
             f"  BID/ASK    {_money(bid)} / {_money(ask)}\n"
             f"  ─────────────────────────────────────────────\n"
-            f"  SESSION HIGH:  {_money(float(data['high']))}\n"
-            f"  SESSION LOW:   {_money(float(data['low']))}\n"
+            f"  SESSION HIGH:  {_money(float(data.get('high', data['ask'])))}\n"
+            f"  SESSION LOW:   {_money(float(data.get('low', data['bid'])))}\n"
             f"  NET CHANGE:    {change_mark}{change:.2f} ({change_mark}{pct:.2f}%) {move_icon}\n"
             f"  ─────────────────────────────────────────────\n"
             f"  UPLINK:  {source}   // MODE: LIVE\n"
@@ -408,14 +409,6 @@ async def render_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as exc:
         logger.exception("Analysis screen failed: %s", exc)
         await _present(update, "<b>🔵 MARKET ANALYSIS</b>\n\n<pre>⌁─────────────────────────────────────────────⌁\n  STATUS: ANALYSIS ENGINE UNAVAILABLE\n⌁─────────────────────────────────────────────⌁</pre>\nPlease refresh in a moment.", analysis_keyboard(update))
-
-
-def _bias_icon(momentum: str) -> str:
-    if "BULLISH" in momentum:
-        return "🟢"
-    if "BEARISH" in momentum:
-        return "🔴"
-    return "🟡"
 
 
 async def render_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -561,27 +554,26 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await render_home(update, context, edit=False)
 
 
-async def activate_token_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> None:
+async def activate_token_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> bool:
     user = update.effective_user
     if user is None:
-        return
+        return False
     existing = database.get_user_by_telegram_id(user.id)
     if existing is None:
         database.create_user(user.id, user.username, user.first_name)
-    import hashlib
-    from sqlalchemy import select
-    from database import TokenPool, _get_session
-    token_hash = hashlib.sha256(raw_token.strip().encode("utf-8")).hexdigest()
-    session = _get_session()
-    try:
-        entry = session.scalar(select(TokenPool).where(TokenPool.token_hash == token_hash, TokenPool.is_used == False))  # noqa: E712
-        duration = entry.duration_days if entry else 30
-    finally:
-        session.close()
-    success = database.activate_user_token(user.id, raw_token, duration)
+        existing = None
+    previous_expiry = database.normalize_datetime_utc(existing.subscription_expiry) if existing else None
+    previous_active = bool(existing and existing.is_active and previous_expiry and previous_expiry > datetime.now(timezone.utc))
+    success = database.activate_user_token(user.id, raw_token)
     if success:
         db_user = database.get_user_by_telegram_id(user.id)
         expiry = database.normalize_datetime_utc(db_user.subscription_expiry) if db_user else None
+        if previous_active and previous_expiry and expiry:
+            duration = max(1, round((expiry - previous_expiry).total_seconds() / 86400))
+        elif expiry:
+            duration = max(1, round((expiry - datetime.now(timezone.utc)).total_seconds() / 86400))
+        else:
+            duration = 30
         expiry_text = expiry.strftime("%d %b %Y • %H:%M UTC") if expiry else "—"
         text = (
             f"<b>✓ ACCESS ACTIVATED</b>\n{DIVIDER}\n\n"
@@ -599,18 +591,21 @@ async def activate_token_for_user(update: Update, context: ContextTypes.DEFAULT_
             parse_mode="HTML",
             reply_markup=access_keyboard(update),
         )
+    return success
 
 
-async def token_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> None:
-    context.user_data["awaiting_token"] = False
-    await activate_token_for_user(update, context, raw_token)
+async def token_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_token: str) -> bool:
+    success = await activate_token_for_user(update, context, raw_token)
+    if success:
+        context.user_data["awaiting_token"] = False
+    return success
 
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text(
             "<b>🔑 ACTIVATE ACCESS</b>\n\n"
-            "Tap the activation button and enter your single-use token.",
+            "Tap the activation button and enter your single-use activation token.",
             parse_mode="HTML",
             reply_markup=access_keyboard(update),
         )
@@ -740,8 +735,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception:
             pass
         target = data.split(":", 1)[1]
-        if target == "home":
-            await render_home(update, context)
+        renderers = {
+            "home": render_home,
+            "account": render_account,
+            "access": render_access,
+            "settings": render_settings,
+            "support": render_support,
+        }
+        renderer = renderers.get(target)
+        if renderer is not None:
+            await renderer(update, context)
         else:
             await render_home(update, context)
         return
