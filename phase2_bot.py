@@ -23,7 +23,9 @@ L = {
     "zh": {"days7":"🟢 7 天","days14":"🟡 14 天","days30":"🔵 30 天","paid":"💳 我已付款","language":"🌐 语言","access_plans":"◆ 访问与套餐","public_menu":"公共菜单","choose_language":"激活前请选择界面语言。","select_plan":"请选择订阅套餐以继续。","support_title":"◉ 联系支持","support_prompt":"请在下一条消息中发送您的问题或描述遇到的问题。","support_routed":"您的消息将安全地转交给支持团队。","support_empty":"请在一条消息中描述您的问题。","support_sent":"<b>支持请求已发送</b>\n\n您的消息已转交支持团队。您将通过 Telegram 收到回复。"},
 }
 
-_ORIGINAL_T = main.t
+
+def _original_t():
+    return getattr(main, "_phase2_original_t", main.t)
 
 
 def _t(lang: str, key: str, **kwargs) -> str:
@@ -35,7 +37,7 @@ def _t(lang: str, key: str, **kwargs) -> str:
     }
     if lang in overrides and key in overrides[lang]:
         return overrides[lang][key]
-    return _ORIGINAL_T(lang, key, **kwargs)
+    return _original_t()(lang, key, **kwargs)
 
 
 def _ui(lang: str, key: str) -> str:
@@ -126,7 +128,7 @@ async def _callback_router(update, context):
         await query.answer()
         await main._present(update, f"<b>{_ui(lang, 'support_title')}</b>\n{main.DIVIDER}\n\n{_ui(lang, 'support_prompt')}", support_keyboard(update))
         return
-    await _original_router(update, context)
+    await getattr(main, "_phase2_original_router", main.callback_router)(update, context)
 
 
 async def _unknown_text_handler(update, context):
@@ -149,14 +151,16 @@ async def _unknown_text_handler(update, context):
                 logger.exception("Failed to route support request")
         await update.message.reply_text(_ui(lang, "support_sent"), parse_mode="HTML", reply_markup=access_keyboard(update))
         return
-    await _original_unknown_text(update, context)
-
-
-_original_router = main.callback_router
-_original_unknown_text = main.unknown_text_handler
+    await getattr(main, "_phase2_original_unknown_text", main.unknown_text_handler)(update, context)
 
 
 def install() -> None:
+    if not hasattr(main, "_phase2_original_t"):
+        main._phase2_original_t = main.t
+    if not hasattr(main, "_phase2_original_router"):
+        main._phase2_original_router = main.callback_router
+    if not hasattr(main, "_phase2_original_unknown_text"):
+        main._phase2_original_unknown_text = main.unknown_text_handler
     main.t = _t
     main.access_keyboard = access_keyboard
     main.support_keyboard = support_keyboard
