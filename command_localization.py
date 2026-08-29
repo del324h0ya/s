@@ -6,7 +6,12 @@ configured administrator's command menu.
 """
 from __future__ import annotations
 
+import logging
+
 from telegram import BotCommand, BotCommandScopeChat
+from telegram.error import TelegramError
+
+logger = logging.getLogger("neural_gold.command_localization")
 
 PUBLIC_COMMANDS: dict[str, list[tuple[str, str]]] = {
     "en": [
@@ -75,13 +80,28 @@ def _commands(items: list[tuple[str, str]]) -> list[BotCommand]:
 
 
 async def install(bot, admin_telegram_id: int | None = None) -> None:
-    """Install localized public command menus plus an admin-only command scope."""
+    """Install localized command menus without making admin-menu failure fatal."""
     for lang, items in PUBLIC_COMMANDS.items():
-        await bot.set_my_commands(_commands(items), language_code=lang)
+        try:
+            await bot.set_my_commands(_commands(items), language_code=lang)
+        except TelegramError as exc:
+            logger.warning(
+                "Public Telegram command localization failed language=%s: %s",
+                lang,
+                exc,
+            )
 
     if admin_telegram_id:
         scope = BotCommandScopeChat(chat_id=admin_telegram_id)
-        # The admin gets the full command set while regular users see only the
-        # customer command surface.
         for lang, items in ADMIN_COMMANDS.items():
-            await bot.set_my_commands(_commands(items), scope=scope, language_code=lang)
+            try:
+                await bot.set_my_commands(
+                    _commands(items), scope=scope, language_code=lang
+                )
+            except TelegramError as exc:
+                logger.warning(
+                    "Admin Telegram command menu unavailable chat_id=%s language=%s: %s",
+                    admin_telegram_id,
+                    lang,
+                    exc,
+                )
