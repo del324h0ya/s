@@ -95,14 +95,25 @@ def handle_payment_succeeded(payment: dict) -> tuple[str, int, str] | None:
     payment_id = str(payment.get("id") or "")
     plan = payment.get("plan") or {}
     plan_id = str(plan.get("id") or payment.get("plan_id") or "")
-    if not order_id or not payment_id:
-        raise FulfillmentRetryableError(
-            f"Payment missing order/payment identity payment={payment_id}"
-        )
 
-    order = whop_storage.get_order(order_id)
+    order = whop_storage.get_order(order_id) if order_id else None
+    checkout_id = str(payment.get("checkout_configuration_id") or "")
+    if order is None and checkout_id:
+        order = whop_storage.get_order_by_checkout(checkout_id)
+        order_id = str(order["id"]) if order else ""
+    if order is None and payment_id:
+        order = whop_storage.get_order_by_payment(payment_id)
+        order_id = str(order["id"]) if order else ""
     if order is None:
-        raise FulfillmentRetryableError(f"Unknown Neural Gold order_id={order_id}")
+        membership = payment.get("membership") or {}
+        membership_id = str(membership.get("id") or "")
+        if membership_id:
+            order = whop_storage.get_order_by_membership(membership_id)
+            order_id = str(order["id"]) if order else ""
+    if order is None:
+        raise FulfillmentRetryableError(
+            f"Unknown Neural Gold order payment={payment_id} checkout={checkout_id}"
+        )
 
     duration = PLAN_DURATIONS.get(plan_id) or PLAN_DURATIONS.get(order["plan_id"])
     if duration is None or duration != order["duration_days"]:
@@ -111,7 +122,7 @@ def handle_payment_succeeded(payment: dict) -> tuple[str, int, str] | None:
         )
         return None
 
-    existing = whop_storage.get_order_by_payment(payment_id)
+    existing = whop_storage.get_order_by_payment(payment_id) if payment_id else None
     if existing is not None and existing.get("token_hash"):
         return None
 
