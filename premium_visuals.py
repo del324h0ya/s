@@ -1,6 +1,9 @@
 """NEURAL GOLD v3.2 — consolidated Telegram UI layer."""
 from __future__ import annotations
 
+import html
+import re
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -17,6 +20,15 @@ def _days_label(days: int) -> str:
 def _checkout(update, days: int) -> str:
     import phase2_bot
     return phase2_bot.checkout_link(update.effective_user.id, days)
+
+
+def _terminal_text(text: str) -> str:
+    """Render Telegram UI text as a safe fixed-width terminal block."""
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:b|strong|i|em|u|s|code|pre)\b[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text).strip()
+    return f"<pre>{html.escape(text)}</pre>"
 
 
 def home_keyboard(update):
@@ -193,8 +205,6 @@ async def callback_router(update, context):
         await render_access(update, context)
         return
 
-    # Phase-2 retains payment confirmation, language, support, and token
-    # service callbacks without taking ownership of the main UI.
     await phase2_bot._callback_router(update, context)
 
 
@@ -209,6 +219,13 @@ def install() -> None:
         main._original_render_price = main.render_price
     if getattr(main, "_original_price_keyboard", None) is None:
         main._original_price_keyboard = main.price_keyboard
+    if getattr(main, "_original_present", None) is None:
+        main._original_present = main._present
+
+    async def _terminal_present(update, text, keyboard, edit=True):
+        return await main._original_present(update, _terminal_text(text), keyboard, edit=edit)
+
+    main._present = _terminal_present
     main.home_keyboard = home_keyboard
     main.access_keyboard = access_keyboard
     main.price_keyboard = price_keyboard
@@ -217,4 +234,4 @@ def install() -> None:
     main.render_home = render_home
     main.callback_router = callback_router
     main.unknown_text_handler = unknown_text_handler
-    main._emoji_ui_installed = True
+    main._terminal_ui_installed = True
