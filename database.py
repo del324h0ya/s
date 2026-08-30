@@ -332,11 +332,16 @@ def claim_telegram_update(update_id: int) -> bool:
         session.rollback()
         row = session.scalar(select(TelegramWebhookEvent).where(TelegramWebhookEvent.update_id == update_id))
         if row is None:
-            session.close()
             raise
         if row.status == "processed":
-            session.close()
             return False
+        if row.status == "failed":
+            row.status = "processing"
+            row.received_at = now
+            row.processed_at = None
+            row.error_message = None
+            session.commit()
+            return True
         age = (now - normalize_datetime_utc(row.received_at)).total_seconds() if row.received_at else 999999
         if age >= 60:
             row.status = "processing"
@@ -344,9 +349,7 @@ def claim_telegram_update(update_id: int) -> bool:
             row.processed_at = None
             row.error_message = None
             session.commit()
-            session.close()
             return True
-        session.close()
         return False
     finally:
         session.close()
