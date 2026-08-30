@@ -33,6 +33,15 @@ if _raw_database_url.startswith("sqlite:///") and not _raw_database_url.startswi
 else:
     DATABASE_URL = _raw_database_url
 
+# The production dependency is psycopg (v3). SQLAlchemy's plain
+# postgresql:// URL can otherwise select the psycopg2 driver, which is not
+# installed in the image. Normalize the scheme so Neon/PostgreSQL uses
+# the installed psycopg v3 driver explicitly.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
+elif DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgres://"):]
+
 REQUIRE_POSTGRES = os.getenv("REQUIRE_POSTGRES", "0").strip().lower() in {"1", "true", "yes"}
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip()
 LOG_FILE = str(Path(tempfile.gettempdir()) / "neural_gold_bot.log")
