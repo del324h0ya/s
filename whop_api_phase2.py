@@ -1,3 +1,9 @@
+"""Whop checkout creation for Neural Gold Phase 2."""
+from __future__ import annotations
+
+import json
+import uuid
+
 import aiohttp
 
 import whop_storage
@@ -22,7 +28,7 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
     if not WHOP_COMPANY_ID:
         return None, None, "WHOP_COMPANY_ID_not_configured"
 
-    order_id = f"ng_{__import__('uuid').uuid4().hex}"
+    order_id = f"ng_{uuid.uuid4().hex}"
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
@@ -54,7 +60,7 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
                 body = await response.text()
                 if response.status >= 400:
                     return None, order_id, f"whop_http_{response.status}:{body}"
-                data = __import__('json').loads(body)
+                data = json.loads(body)
     except Exception as exc:
         return None, order_id, f"whop_request_failed:{exc}"
 
