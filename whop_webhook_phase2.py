@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -30,18 +29,14 @@ class FulfillmentRetryableError(RuntimeError):
 
 
 def _signing_key(secret: str) -> bytes:
-    """Decode Standard Webhooks secrets; support Whop production and sandbox prefixes."""
-    value = secret.strip()
-    if value.startswith("whsec_"):
-        encoded = value[6:]
-    elif value.startswith("ws_"):
-        encoded = value[3:]
-    else:
-        return value.encode("utf-8")
-    try:
-        return base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
-    except (binascii.Error, ValueError):
-        return encoded.encode("utf-8")
+    """Return the raw Whop webhook secret used by Standard Webhooks.
+
+    Whop's Python SDK base64-encodes the environment value before passing it
+    to the Standard Webhooks verifier. The verifier then base64-decodes that
+    value, yielding the original environment value as the HMAC key. Therefore
+    the ``ws_``/``whsec_`` prefix is part of the key and must be preserved.
+    """
+    return secret.strip().encode("utf-8")
 
 
 def verify_signature(payload: bytes, headers: dict) -> dict:
