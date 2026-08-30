@@ -1,0 +1,29 @@
+name: Daily PostgreSQL Backup
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Create PostgreSQL dump
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_BACKUP }}
+        run: |
+          test -n "$DATABASE_URL"
+          mkdir -p backups
+          pg_dump "$DATABASE_URL" --format=custom --no-owner --file="backups/neural_gold_$(date -u +%Y%m%dT%H%M%SZ).dump"
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neural-gold-postgres-backup-${{ github.run_id }}
+          path: backups/*.dump
+          retention-days: 14

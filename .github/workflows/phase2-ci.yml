@@ -15,31 +15,26 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ci-placeholder
       GOLDAPI_API_KEY: ci-placeholder
+      METALS_API_KEY: ci-placeholder
       ADMIN_TELEGRAM_ID: "0"
       DATABASE_URL: sqlite:///ci_test.db
       LOG_LEVEL: WARNING
       BELMO_PUBLIC_URL: ""
-      TELEGRAM_WEBHOOK_SECRET: ""
+      TELEGRAM_WEBHOOK_SECRET: "ci-secret"
       WHOP_API_KEY: ""
       WHOP_COMPANY_ID: ""
-      WHOP_WEBHOOK_SECRET: ""
+      WHOP_WEBHOOK_SECRET: "ci-whop"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
-
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
       - name: Compile Python sources
         run: python -m compileall -q .
-
       - name: Run tests
         run: python -m pytest -q

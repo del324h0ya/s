@@ -1,21 +1,15 @@
 """
 database.py — SQLAlchemy ORM models and database operations.
 
-Provides:
-  - User model (profiles, subscription tokens, expiry)
-  - UserSession model (per-user state cache to avoid redundant API calls)
-  - TokenPool model (pre-generated tokens the admin can distribute)
-  - All CRUD helpers used by auth.py and main.py
-
-SQLite is used by default; switch to PostgreSQL by setting the
-DATABASE_URL environment variable to a postgresql:// URI.
+PostgreSQL is the production target. SQLite remains available for local/CI use.
 """
+from __future__ import annotations
 
 import hashlib
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, select
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, select, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import DATABASE_URL
@@ -75,7 +69,25 @@ class TokenPool(Base):
     used_by_telegram_id = Column(Integer, nullable=True)
 
 
-engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+class TelegramWebhookEvent(Base):
+    __tablename__ = "telegram_webhook_events"
+    update_id = Column(Integer, primary_key=True)
+    status = Column(String(32), nullable=False, default="processing")
+    received_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    processed_at = Column(DateTime, nullable=True)
+    error_message = Column(String(1000), nullable=True)
+
+
+if DATABASE_URL.startswith(("postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://")):
+    engine = create_engine(
+        DATABASE_URL, echo=False, pool_pre_ping=True,
+        pool_size=int(__import__("os").getenv("DB_POOL_SIZE", "20")),
+        max_overflow=int(__import__("os").getenv("DB_MAX_OVERFLOW", "40")),
+        pool_timeout=int(__import__("os").getenv("DB_POOL_TIMEOUT", "10")),
+    )
+else:
+    engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+
 if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine, "connect")
     def _configure_sqlite(dbapi_connection, connection_record):
@@ -93,8 +105,7 @@ def init_db() -> None:
     try:
         Base.metadata.create_all(bind=engine)
         if DATABASE_URL.startswith("sqlite"):
-            from sqlalchemy import inspect, text
-            inspector = inspect(engine)
+            inspector = __import__("sqlalchemy").inspect(engine)
             cols = {c["name"] for c in inspector.get_columns("users")}
             if "language" not in cols:
                 with engine.begin() as conn:
@@ -186,23 +197,25 @@ def activate_user_token(telegram_id: int, raw_token: str, duration_days: int | N
     session = _get_session()
     try:
         token_hash = _hash_token(raw_token)
-        pool_entry = session.scalar(select(TokenPool).where(TokenPool.token_hash == token_hash, TokenPool.is_used == False))  # noqa: E712
-        if pool_entry is None:
+        result = session.execute(text("""
+            UPDATE token_pool
+            SET is_used = :used, used_at = :used_at, used_by_telegram_id = :telegram_id
+            WHERE token_hash = :token_hash AND is_used = :unused
+        """), {"used": True, "used_at": datetime.now(timezone.utc), "telegram_id": telegram_id, "token_hash": token_hash, "unused": False})
+        if result.rowcount != 1:
             logger.warning("Token activation failed for user %d: token not found or already used.", telegram_id)
+            return False
+        pool_entry = session.scalar(select(TokenPool).where(TokenPool.token_hash == token_hash))
+        if pool_entry is None:
+            session.rollback()
             return False
         if duration_days is None:
             duration_days = pool_entry.duration_days
-
-        pool_entry.is_used = True
-        pool_entry.used_at = datetime.now(timezone.utc)
-        pool_entry.used_by_telegram_id = telegram_id
-
         user = session.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is None:
             user = User(telegram_id=telegram_id, is_active=False)
             session.add(user)
             session.flush()
-
         now = datetime.now(timezone.utc)
         current_expiry = normalize_datetime_utc(user.subscription_expiry)
         base_time = current_expiry if user.is_active and current_expiry and current_expiry > now else now
@@ -210,7 +223,6 @@ def activate_user_token(telegram_id: int, raw_token: str, duration_days: int | N
         user.token = token_hash
         user.is_active = True
         user.subscription_expiry = base_time + timedelta(days=duration_days)
-
         session.commit()
         logger.info("User %d activated token (expires %s).", telegram_id, user.subscription_expiry.isoformat())
         return True
@@ -305,5 +317,52 @@ def update_session(user_id: int, **kwargs) -> None:
     except Exception as exc:
         session.rollback()
         logger.exception("update_session failed: %s", exc)
+    finally:
+        session.close()
+
+
+def claim_telegram_update(update_id: int) -> bool:
+    session = _get_session()
+    now = datetime.now(timezone.utc)
+    try:
+        session.add(TelegramWebhookEvent(update_id=update_id, status="processing", received_at=now))
+        session.commit()
+        return True
+    except Exception:
+        session.rollback()
+        row = session.scalar(select(TelegramWebhookEvent).where(TelegramWebhookEvent.update_id == update_id))
+        if row is None:
+            session.close()
+            raise
+        if row.status == "processed":
+            session.close()
+            return False
+        age = (now - normalize_datetime_utc(row.received_at)).total_seconds() if row.received_at else 999999
+        if age >= 60:
+            row.status = "processing"
+            row.received_at = now
+            row.processed_at = None
+            row.error_message = None
+            session.commit()
+            session.close()
+            return True
+        session.close()
+        return False
+    finally:
+        session.close()
+
+
+def mark_telegram_update(update_id: int, status: str, error_message: str | None = None) -> None:
+    session = _get_session()
+    try:
+        row = session.scalar(select(TelegramWebhookEvent).where(TelegramWebhookEvent.update_id == update_id))
+        if row:
+            row.status = status
+            row.processed_at = datetime.now(timezone.utc)
+            row.error_message = error_message[:1000] if error_message else None
+            session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("mark_telegram_update failed update_id=%s", update_id)
     finally:
         session.close()
