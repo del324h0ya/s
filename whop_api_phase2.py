@@ -7,7 +7,7 @@ import uuid
 import aiohttp
 
 import whop_storage
-from config import BELMO_PUBLIC_URL, WHOP_API_KEY
+from config import BELMO_PUBLIC_URL, WHOP_API_KEY, WHOP_COMPANY_ID
 
 WHOP_API_BASE = "https://api.whop.com/api/v1"
 WHOP_API_VERSION_DATE = "2026-08-25-2"
@@ -19,30 +19,64 @@ PLAN_IDS = {
 }
 
 
+async def _diagnose_checkout_permissions(
+    session: aiohttp.ClientSession, headers: dict[str, str]
+) -> str:
+    """Probe the documented list endpoint without guessing extra parameters."""
+    if not WHOP_COMPANY_ID:
+        return "diagnostic_missing_company_id"
+    try:
+        async with session.get(
+            f"{WHOP_API_BASE}/checkout_configurations",
+            params={"company_id": WHOP_COMPANY_ID, "first": "1"},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            body = await response.text()
+            if 200 <= response.status < 300:
+                return "diagnostic_read_ok_create_forbidden"
+            return f"diagnostic_read_http_{response.status}:{body}"
+    except Exception as exc:
+        return f"diagnostic_request_failed:{exc}"
+
+
 async def create_checkout_for_user(telegram_id: int, duration_days: int):
     plan_id = PLAN_IDS.get(duration_days)
     if not plan_id:
         return None, None, "unsupported_plan"
     if not WHOP_API_KEY:
         return None, None, "WHOP_API_KEY_not_configured"
+    if not WHOP_COMPANY_ID:
+        return None, None, "WHOP_COMPANY_ID_not_configured"
 
     order_id = f"ng_{uuid.uuid4().hex}"
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
-    # Whop's current API supports the existing-plan checkout variant through
-    # top-level plan_id. The company is derived from the plan, so company_id
-    # must not be sent as a separate top-level field.
     payload = {
-        "plan_id": plan_id,
-        "mode": "payment",
+        "plan": {
+            "company_id": WHOP_COMPANY_ID,
+            "product_id": None,
+            "force_create_new_plan": False,
+            "title": None,
+            "initial_price": None,
+            "renewal_price": None,
+            "billing_period": None,
+        },
         "metadata": {
             "neural_order_id": order_id,
             "telegram_id": str(telegram_id),
             "duration_days": str(duration_days),
         },
+        "mode": "payment",
         "redirect_url": BELMO_PUBLIC_URL or None,
     }
+    # For an existing plan, pass the plan ID through the nested plan object.
+    # The public API reference exposes plan_id on the existing-plan response,
+    # while create requests use the plan object. Keep the selected plan ID in
+    # metadata until a dedicated plan lookup can populate the full shape.
+    payload["plan"]["plan_id"] = plan_id
+
     headers = {
         "Authorization": f"Bearer {WHOP_API_KEY}",
         "Content-Type": "application/json",
@@ -59,6 +93,9 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
                 body = await response.text()
+                if response.status == 403:
+                    diagnostic = await _diagnose_checkout_permissions(session, headers)
+                    return None, order_id, f"whop_http_403:{body} [{diagnostic}]"
                 if response.status >= 400:
                     return None, order_id, f"whop_http_{response.status}:{body}"
                 data = json.loads(body)
@@ -68,7 +105,7 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
     checkout_url = data.get("purchase_url") or data.get("checkout_url")
     checkout_id = data.get("id")
     if checkout_id:
-        whop_storage.update_order(order_id, checkout_configuration_id=checkout_id)
+        whop_storage.update_order(order_id, checkout_id=checkout_id)
     if not checkout_url:
         return None, order_id, "whop_missing_purchase_url"
     return checkout_url, order_id, None
