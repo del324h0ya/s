@@ -24,11 +24,11 @@ async def _diagnose_checkout_permissions(
 ) -> str:
     """Probe the documented list endpoint without guessing extra parameters."""
     if not WHOP_COMPANY_ID:
-        return "diagnostic_missing_company_id"
+        return "diagnostic_missing_account_id"
     try:
         async with session.get(
             f"{WHOP_API_BASE}/checkout_configurations",
-            params={"company_id": WHOP_COMPANY_ID, "first": "1"},
+            params={"account_id": WHOP_COMPANY_ID, "first": "1"},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
         ) as response:
@@ -53,10 +53,10 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
-    # The selected plan already exists in Whop. Create the checkout
-    # configuration by referencing that plan directly at the top level.
+    # Current Whop API schema calls the company/account identifier account_id.
+    # The existing environment variable name is retained for compatibility.
     payload = {
-        "company_id": WHOP_COMPANY_ID,
+        "account_id": WHOP_COMPANY_ID,
         "plan_id": plan_id,
         "metadata": {
             "neural_order_id": order_id,
