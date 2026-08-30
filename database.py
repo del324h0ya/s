@@ -9,7 +9,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, create_engine, event, select, text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, Integer, String, create_engine, event, select, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import DATABASE_URL
@@ -32,7 +32,7 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
     username = Column(String(128), nullable=True)
     first_name = Column(String(128), nullable=True)
     language = Column(String(8), default="en", nullable=False)
@@ -66,12 +66,12 @@ class TokenPool(Base):
     is_used = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     used_at = Column(DateTime, nullable=True)
-    used_by_telegram_id = Column(Integer, nullable=True)
+    used_by_telegram_id = Column(BigInteger, nullable=True)
 
 
 class TelegramWebhookEvent(Base):
     __tablename__ = "telegram_webhook_events"
-    update_id = Column(Integer, primary_key=True)
+    update_id = Column(BigInteger, primary_key=True)
     status = Column(String(32), nullable=False, default="processing")
     received_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     processed_at = Column(DateTime, nullable=True)
@@ -104,6 +104,12 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expi
 def init_db() -> None:
     try:
         Base.metadata.create_all(bind=engine)
+        if DATABASE_URL.startswith(("postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://")):
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT USING telegram_id::bigint"))
+                conn.execute(text("ALTER TABLE token_pool ALTER COLUMN used_by_telegram_id TYPE BIGINT USING used_by_telegram_id::bigint"))
+                conn.execute(text("ALTER TABLE telegram_webhook_events ALTER COLUMN update_id TYPE BIGINT USING update_id::bigint"))
+            logger.info("Database migration applied: Telegram identifiers -> BIGINT")
         if DATABASE_URL.startswith("sqlite"):
             inspector = __import__("sqlalchemy").inspect(engine)
             cols = {c["name"] for c in inspector.get_columns("users")}
