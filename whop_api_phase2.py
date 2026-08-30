@@ -10,7 +10,6 @@ import whop_storage
 from config import BELMO_PUBLIC_URL, WHOP_API_KEY, WHOP_COMPANY_ID
 
 WHOP_API_BASE = "https://api.whop.com/api/v1"
-WHOP_API_VERSION_DATE = "2026-08-25-2"
 
 PLAN_IDS = {
     7: "plan_ksl11weFJ0z41",
@@ -19,28 +18,27 @@ PLAN_IDS = {
 }
 
 
-async def _diagnose_checkout_permissions(
-    session: aiohttp.ClientSession, headers: dict[str, str]
-) -> str:
-    """Probe the documented list endpoint with the company_id parameter."""
-    if not WHOP_COMPANY_ID:
-        return "diagnostic_missing_company_id"
+def _compact_error_body(body: str) -> str:
+    """Return a compact JSON error without logging credentials or large payloads."""
     try:
-        async with session.get(
-            f"{WHOP_API_BASE}/checkout_configurations",
-            params={"company_id": WHOP_COMPANY_ID, "first": "1"},
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as response:
-            body = await response.text()
-            if 200 <= response.status < 300:
-                return "diagnostic_read_ok_create_forbidden"
-            return f"diagnostic_read_http_{response.status}:{body}"
-    except Exception as exc:
-        return f"diagnostic_request_failed:{exc}"
+        parsed = json.loads(body)
+        error = parsed.get("error") if isinstance(parsed, dict) else None
+        if isinstance(error, dict):
+            return json.dumps(
+                {
+                    "type": error.get("type"),
+                    "code": error.get("code"),
+                    "message": error.get("message"),
+                },
+                separators=(",", ":"),
+            )
+    except (TypeError, ValueError):
+        pass
+    return body[:500]
 
 
 async def create_checkout_for_user(telegram_id: int, duration_days: int):
+    """Create a Whop checkout session for an existing Neural Gold plan."""
     plan_id = PLAN_IDS.get(duration_days)
     if not plan_id:
         return None, None, "unsupported_plan"
@@ -53,24 +51,23 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
-    # Whop checkout configurations use company_id for the owning company.
-    # Keep the existing environment variable name for compatibility.
+    # Whop's current checkout API supports an existing plan through the
+    # top-level plan_id field. The company is resolved from the authorized
+    # account/API credential, so company_id is intentionally not sent here.
     payload = {
-        "company_id": WHOP_COMPANY_ID,
         "plan_id": plan_id,
+        "mode": "payment",
         "metadata": {
             "neural_order_id": order_id,
             "telegram_id": str(telegram_id),
             "duration_days": str(duration_days),
         },
-        "mode": "payment",
         "redirect_url": BELMO_PUBLIC_URL or None,
     }
 
     headers = {
         "Authorization": f"Bearer {WHOP_API_KEY}",
         "Content-Type": "application/json",
-        "Api-Version-Date": WHOP_API_VERSION_DATE,
         "Idempotency-Key": order_id,
     }
 
@@ -84,11 +81,23 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
             ) as response:
                 body = await response.text()
                 if response.status == 403:
-                    diagnostic = await _diagnose_checkout_permissions(session, headers)
-                    return None, order_id, f"whop_http_403:{body} [{diagnostic}]"
+                    detail = _compact_error_body(body)
+                    return (
+                        None,
+                        order_id,
+                        "whop_permission_denied: "
+                        f"checkout_configuration:create is not authorized for the "
+                        f"configured API credential; response={detail}",
+                    )
                 if response.status >= 400:
-                    return None, order_id, f"whop_http_{response.status}:{body}"
-                data = json.loads(body)
+                    detail = _compact_error_body(body)
+                    return None, order_id, f"whop_http_{response.status}:{detail}"
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    return None, order_id, "whop_invalid_json_response"
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        return None, order_id, f"whop_request_failed:{exc}"
     except Exception as exc:
         return None, order_id, f"whop_request_failed:{exc}"
 
