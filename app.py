@@ -20,6 +20,7 @@ import expiry_notifier
 import premium_visuals
 import whop_api_phase2
 import whop_storage
+import telegram_webhook_state
 from config import ADMIN_TELEGRAM_ID, BELMO_PUBLIC_URL, SENTRY_DSN, SENTRY_ENVIRONMENT, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
 from main import build_application, post_init, setup_logging
 from whop_webhook_phase2 import handle_event, notify_customer, verify_signature
@@ -33,9 +34,12 @@ if SENTRY_DSN:
 
 async def _sentry_telegram_error(update, context) -> None:
     error = getattr(context, "error", None)
+    update_id = getattr(update, "update_id", None)
+    if isinstance(update_id, int):
+        telegram_webhook_state.mark_failed(update_id, str(error) if error else "handler_error")
     if error is not None:
         sentry_sdk.capture_exception(error)
-    logger.exception("Telegram handler exception", exc_info=error)
+    logger.exception("Telegram handler exception update_id=%s", update_id, exc_info=error)
 
 
 def _structured_log(level: int, event: str, **fields: object) -> None:
@@ -152,7 +156,11 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
         if not isinstance(update_id, int):
             _structured_log(logging.WARNING, "telegram_webhook_missing_update_id")
             return JSONResponse(status_code=400, content={"ok": False, "error": "missing_update_id"})
-        update = Update.de_json(data, telegram_app.bot)
+        try:
+            update = Update.de_json(data, telegram_app.bot)
+        except Exception as exc:
+            _structured_log(logging.WARNING, "telegram_webhook_invalid_update", update_id=update_id, error_type=type(exc).__name__)
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_update"})
         if update is None:
             _structured_log(logging.WARNING, "telegram_webhook_invalid_update", update_id=update_id)
             return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_update"})
@@ -167,6 +175,10 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             sentry_sdk.capture_exception(exc)
             await _alert_admin(f"Telegram webhook failed\nupdate_id=<code>{update_id}</code>\nerror=<code>{type(exc).__name__}: {str(exc)[:1000]}</code>")
             return JSONResponse(status_code=500, content={"ok": False, "error": "processing_failed"})
+        if telegram_webhook_state.get_status(update_id) == "failed":
+            _structured_log(logging.ERROR, "telegram_webhook_handler_failed", update_id=update_id)
+            await _alert_admin(f"Telegram handler failed\nupdate_id=<code>{update_id}</code>\nTelegram will retry this update.")
+            return JSONResponse(status_code=500, content={"ok": False, "error": "handler_failed"})
         database.mark_telegram_update(update_id, "processed")
         _structured_log(logging.INFO, "telegram_webhook_processed", update_id=update_id)
         return JSONResponse(status_code=200, content={"ok": True})
