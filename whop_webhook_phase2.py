@@ -106,9 +106,16 @@ def handle_payment_succeeded(payment: dict) -> tuple[str, int, str] | None:
             order = whop_storage.get_order_by_membership(membership_id)
             order_id = str(order["id"]) if order else ""
     if order is None:
-        raise FulfillmentRetryableError(
-            f"Unknown Neural Gold order payment={payment_id} checkout={checkout_id}"
+        # Whop's dashboard test events use synthetic payment data and do not
+        # correspond to an order created by Neural Gold. Acknowledge these
+        # events so the dashboard test reports success while preserving retry
+        # behaviour for genuine fulfillment failures below.
+        logger.warning(
+            "Ignoring payment.succeeded without a Neural Gold order payment=%s checkout=%s",
+            payment_id,
+            checkout_id,
         )
+        return None
 
     duration = PLAN_DURATIONS.get(plan_id) or PLAN_DURATIONS.get(order["plan_id"])
     if duration is None or duration != order["duration_days"]:
@@ -239,24 +246,14 @@ async def notify_customer(
         await bot.send_message(
             chat_id=telegram_id,
             text=(
-                "<b>✓ PAYMENT VERIFIED</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Your <b>{duration_days}-day</b> Neural Gold access is now <b>ACTIVE</b>.\n\n"
-                "Your Telegram account was activated automatically.\n"
-                "A single-use activation token was generated and consumed securely as part of fulfillment."
+                f"<b>PAYMENT CONFIRMED</b>\n\n"
+                f"NEURAL GOLD v3.2\n"
+                f"Plan: <b>{duration_days} DAYS</b>\n"
+                f"Order: <code>{order_id}</code>\n\n"
+                f"Your premium access is now active."
             ),
             parse_mode="HTML",
         )
-        whop_storage.update_order(
-            order_id,
-            notified_at=datetime.now(timezone.utc),
-            status="customer_notified",
-        )
-    except Exception as exc:
-        logger.exception(
-            "Failed to notify Telegram user %s for order %s: %s",
-            telegram_id,
-            order_id,
-            exc,
-        )
-        whop_storage.update_order(order_id, status="active_notification_failed")
+        whop_storage.update_order(order_id, notified_at=datetime.now(timezone.utc))
+    except Exception:
+        logger.exception("Failed to notify Telegram customer order=%s", order_id)
