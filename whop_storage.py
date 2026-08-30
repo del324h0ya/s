@@ -14,7 +14,7 @@ logger = logging.getLogger("neural_gold.whop_storage")
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS whop_orders (
     id VARCHAR(64) PRIMARY KEY,
-    telegram_id INTEGER NOT NULL,
+    telegram_id BIGINT NOT NULL,
     plan_id VARCHAR(128) NOT NULL,
     duration_days INTEGER NOT NULL,
     checkout_id VARCHAR(128) UNIQUE,
@@ -57,6 +57,10 @@ def init_phase2_db() -> None:
             statement = statement.strip()
             if statement:
                 conn.execute(text(statement))
+        if database.DATABASE_URL.startswith(("postgresql://", "postgresql+psycopg://", "postgresql+psycopg2://")):
+            conn.execute(text(
+                "ALTER TABLE whop_orders ALTER COLUMN telegram_id TYPE BIGINT USING telegram_id::bigint"
+            ))
     logger.info("Whop Phase 2 tables initialised.")
 
 
