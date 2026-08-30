@@ -53,16 +53,11 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
+    # The selected plan already exists in Whop. Create the checkout
+    # configuration by referencing that plan directly at the top level.
     payload = {
-        "plan": {
-            "company_id": WHOP_COMPANY_ID,
-            "product_id": None,
-            "force_create_new_plan": False,
-            "title": None,
-            "initial_price": None,
-            "renewal_price": None,
-            "billing_period": None,
-        },
+        "company_id": WHOP_COMPANY_ID,
+        "plan_id": plan_id,
         "metadata": {
             "neural_order_id": order_id,
             "telegram_id": str(telegram_id),
@@ -71,11 +66,6 @@ async def create_checkout_for_user(telegram_id: int, duration_days: int):
         "mode": "payment",
         "redirect_url": BELMO_PUBLIC_URL or None,
     }
-    # For an existing plan, pass the plan ID through the nested plan object.
-    # The public API reference exposes plan_id on the existing-plan response,
-    # while create requests use the plan object. Keep the selected plan ID in
-    # metadata until a dedicated plan lookup can populate the full shape.
-    payload["plan"]["plan_id"] = plan_id
 
     headers = {
         "Authorization": f"Bearer {WHOP_API_KEY}",
