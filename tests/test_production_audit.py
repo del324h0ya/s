@@ -58,13 +58,14 @@ class WebhookStorageTests(unittest.TestCase):
         self.assertFalse(database.claim_telegram_update(update_id))
         database.mark_telegram_update(update_id, "processed")
 
-    def test_failed_update_can_be_reclaimed_after_retry_window(self):
+    def test_failed_update_is_immediately_retryable(self):
         import database
         database.init_db()
         update_id = int(time.time() * 1000) + 1
         self.assertTrue(database.claim_telegram_update(update_id))
         database.mark_telegram_update(update_id, "failed", "test")
-        self.assertFalse(database.claim_telegram_update(update_id))
+        self.assertTrue(database.claim_telegram_update(update_id))
+        database.mark_telegram_update(update_id, "processed")
 
 
 if __name__ == "__main__":
