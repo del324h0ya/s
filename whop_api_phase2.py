@@ -9,6 +9,7 @@ import whop_storage
 from config import BELMO_PUBLIC_URL, WHOP_API_KEY
 
 WHOP_API_BASE = "https://api.whop.com/api/v1"
+WHOP_API_VERSION_DATE = "2026-08-25-2"
 PLAN_IDS = {
     7: "plan_ksl11weFJ0z41",
     14: "plan_Yc1JnCIP8jgII",
@@ -33,10 +34,9 @@ async def create_checkout_for_user(
     if not whop_storage.create_order(order_id, telegram_id, plan_id, duration_days):
         return None, None, "database_order_create_failed"
 
-    # Whop's current Checkout Configurations API accepts an existing plan
-    # through the top-level `plan_id`. The company is already scoped by the
-    # company API key, so no company_id or inline {"id": ...} plan object is
-    # required here.
+    # Whop Checkout Configurations accepts an existing plan through plan_id.
+    # The Company API key scopes the request to its company, so company_id is
+    # intentionally not duplicated in this payload.
     payload = {
         "plan_id": plan_id,
         "mode": "payment",
@@ -52,6 +52,7 @@ async def create_checkout_for_user(
 
     headers = {
         "Authorization": f"Bearer {WHOP_API_KEY}",
+        "Api-Version-Date": WHOP_API_VERSION_DATE,
         "Content-Type": "application/json",
         "Idempotency-Key": f"checkout-{order_id}",
     }
