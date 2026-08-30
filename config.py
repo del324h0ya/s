@@ -22,10 +22,8 @@ WHOP_COMPANY_ID = os.getenv("WHOP_COMPANY_ID", "").strip()
 WHOP_WEBHOOK_SECRET = os.getenv("WHOP_WEBHOOK_SECRET", "").strip()
 
 GOLDAPI_API_KEY = os.getenv("GOLDAPI_API_KEY", "").strip()
-METALS_API_KEY = os.getenv("METALS_API_KEY", "").strip()
 PRICE_SYMBOL = "XAU/USD"
 GOLDAPI_ENDPOINT = "https://www.goldapi.io/api/price/XAU/USD"
-METALS_API_ENDPOINT = "https://api.metals-api.com/api/latest"
 
 _raw_database_url = os.getenv("DATABASE_URL", "sqlite:///xauusd_bot.db").strip()
 if _raw_database_url.startswith("sqlite:///") and not _raw_database_url.startswith("sqlite:////"):
